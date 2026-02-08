@@ -136,9 +136,13 @@ class BhashiniTranslator:
         text_column: str,
         checkpoint_file: str,
         output_column: str = "hindi_translation",
+        start_row: Optional[int] = None,
+        end_row: Optional[int] = None,
     ) -> pd.DataFrame:
         """
         Translate all rows. Loads checkpoint if present and resumes; saves every checkpoint_interval rows.
+        If start_row is set (1-based), translation starts from that row; earlier rows are taken from checkpoint.
+        If end_row is set (1-based), translation stops after that row (inclusive).
         """
         t_start = time.monotonic()
         if output_column not in df.columns:
@@ -151,42 +155,50 @@ class BhashiniTranslator:
             ck = pd.read_csv(checkpoint_file, nrows=1)
             if output_column in ck.columns:
                 full_ck = pd.read_csv(checkpoint_file)
-                if len(full_ck) > 0 and full_ck[output_column].notna().any():
-                    last_filled = full_ck[output_column].notna() & (
-                        full_ck[output_column].astype(str).str.strip() != ""
-                    )
-                    if last_filled.any():
-                        start_idx = int(last_filled.idxmax()) + 1
-                    else:
-                        start_idx = 0
+                if len(full_ck) > 0:
+                    df = full_ck
+                    if full_ck[output_column].notna().any():
+                        last_filled = full_ck[output_column].notna() & (
+                            full_ck[output_column].astype(str).str.strip() != ""
+                        )
+                        if last_filled.any():
+                            start_idx = int(last_filled.idxmax()) + 1
                     if start_idx > 0:
-                        df = full_ck
                         logger.info("Resuming from checkpoint row %s", start_idx)
         except FileNotFoundError:
             pass
         except Exception as e:
             logger.warning("Could not load checkpoint: %s. Starting from 0.", e)
 
+        if start_row is not None:
+            start_idx = max(start_idx, start_row - 1)
+            logger.info("Starting from row %s (--start-row)", start_row)
+
         total = len(df)
+        end_idx = min(total, end_row) if end_row is not None else total
+        if end_row is not None:
+            logger.info("Ending at row %s (--end-row)", end_row)
         texts = df[text_column].astype(str).tolist()
         logger.info(
-            "Translation started (total=%s, batch_size=%s, resume_from=%s)",
+            "Translation started (total=%s, batch_size=%s, resume_from=%s, end_at=%s)",
             total,
             self.batch_size,
             start_idx,
+            end_idx if end_row is not None else "end",
         )
 
-        with tqdm(total=total, initial=start_idx, unit="row", desc="Translate") as pbar:
+        with tqdm(total=end_idx, initial=min(start_idx, end_idx), unit="row", desc="Translate") as pbar:
             i = start_idx
-            while i < total:
-                batch = texts[i : i + self.batch_size]
+            while i < total and i < end_idx:
+                batch_end = min(i + self.batch_size, end_idx)
+                batch = texts[i : batch_end]
                 try:
                     translated = self.translate_batch(batch)
                 except Exception as e:
                     logger.error("Batch at index %s failed: %s", i, e)
                     raise
                 for j, t in enumerate(translated):
-                    if i + j < total:
+                    if i + j < total and i + j < end_idx:
                         df.iloc[i + j, df.columns.get_loc(output_column)] = t
                 i += len(batch)
                 pbar.update(len(batch))

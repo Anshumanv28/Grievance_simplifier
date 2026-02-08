@@ -1,6 +1,5 @@
 """
-Orchestrator for the Hindi grievance translation pipeline.
-Wires translation, POS analysis, Gemini analysis, and output generation.
+Run the full grievance pipeline: translation (Bhashini) → POS (Stanza) → Gemini → final output.
 """
 
 import argparse
@@ -52,7 +51,7 @@ def validate_input(df: pd.DataFrame, text_column: str) -> None:
 
 def main() -> None:
     load_dotenv()
-    parser = argparse.ArgumentParser(description="Hindi grievance translation pipeline")
+    parser = argparse.ArgumentParser(description="Grievance pipeline: translate → POS → Gemini → output")
     parser.add_argument("--input", default=DEFAULT_INPUT_CSV, help="Input CSV path")
     parser.add_argument("--text-column", default=DEFAULT_TEXT_COLUMN, help="Text column name")
     parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT, help="Translation checkpoint CSV")
@@ -64,10 +63,17 @@ def main() -> None:
     parser.add_argument("--output", default=DEFAULT_OUTPUT_CSV, help="Final output CSV")
     parser.add_argument("--summary", default=DEFAULT_SUMMARY_JSON, help="Summary stats JSON")
     parser.add_argument("--skip-translation", action="store_true", help="Use existing checkpoint only")
+    parser.add_argument("--start-row", type=int, default=None, metavar="N", help="Start translation from row N (1-based); use checkpoint for rows before N")
+    parser.add_argument("--end-row", type=int, default=None, metavar="N", help="Stop translation after row N (1-based, inclusive)")
+    parser.add_argument("--translation-only", action="store_true", help="Run only translation (Stage 1), then exit")
     parser.add_argument("--skip-pos", action="store_true", help="Load POS from --pos-json if present")
     parser.add_argument("--skip-gemini", action="store_true", help="Load Gemini from --gemini-json if present")
     parser.add_argument("--log-dir", default=LOG_DIR, help="Log directory")
     args = parser.parse_args()
+
+    if args.translation_only:
+        args.skip_pos = True
+        args.skip_gemini = True
 
     setup_logging(args.log_dir)
     logger = logging.getLogger(__name__)
@@ -77,7 +83,7 @@ def main() -> None:
     if not bhashini_key and not args.skip_translation:
         logger.error("BHASHINI_API_KEY not set. Set in .env or skip translation with --skip-translation")
         sys.exit(1)
-    if not gemini_key and not args.skip_gemini:
+    if not gemini_key and not args.skip_gemini and not args.translation_only:
         logger.error("GEMINI_API_KEY not set. Set in .env or skip with --skip-gemini")
         sys.exit(1)
 
@@ -104,6 +110,8 @@ def main() -> None:
                 text_column=args.text_column,
                 checkpoint_file=args.checkpoint,
                 output_column=hindi_column,
+                start_row=args.start_row,
+                end_row=args.end_row,
             )
         else:
             if Path(args.checkpoint).exists():
@@ -127,6 +135,11 @@ def main() -> None:
                 (row["grievance_text"] or "")[:MAX_SAMPLE_LEN],
                 (row["hindi_translation"] or "")[:MAX_SAMPLE_LEN],
             )
+
+    if args.translation_only:
+        total_elapsed = time.monotonic() - pipeline_start
+        logger.info("Pipeline completed (translation only) in %.2fs total.", total_elapsed)
+        return
 
     # Step 2: POS
     with stage_timer(logger, "Stage 2: POS extraction"):
