@@ -50,7 +50,10 @@ class StanzaPOSAnalyzer:
         Return list of token info: [{word, lemma, upos}, ...].
         Skips empty or whitespace-only text.
         """
-        text = (text or "").strip()
+        if text is None or (isinstance(text, float) and text != text):  # NaN
+            text = ""
+        else:
+            text = str(text).strip()
         if not text:
             return []
         try:
