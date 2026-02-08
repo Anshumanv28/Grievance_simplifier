@@ -11,6 +11,12 @@ from typing import Any, Dict, List, Optional
 import stanza
 from tqdm import tqdm
 
+try:
+    import torch
+    _use_gpu = torch.cuda.is_available()
+except Exception:
+    _use_gpu = False
+
 logger = logging.getLogger(__name__)
 
 # Stanza Hindi model
@@ -31,11 +37,11 @@ class StanzaPOSAnalyzer:
         if self._pipeline is None:
             logger.info("Downloading Stanza Hindi model if needed...")
             stanza.download(self.lang)
-            logger.info("Building Stanza pipeline...")
+            logger.info("Building Stanza pipeline (use_gpu=%s)...", _use_gpu)
             self._pipeline = stanza.Pipeline(
                 self.lang,
                 processors=self.processors,
-                use_gpu=False,
+                use_gpu=_use_gpu,
             )
         return self._pipeline
 
